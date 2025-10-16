@@ -854,11 +854,23 @@ def build_geo_map(location_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def _excel_safe_value(value: Any) -> Any:
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
 def export_dataframe_to_excel(sheets: Dict[str, pd.DataFrame]) -> bytes:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         for sheet_name, frame in sheets.items():
-            frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+            sanitized = frame.copy()
+            for column in sanitized.columns:
+                if sanitized[column].dtype == "O":
+                    sanitized[column] = sanitized[column].apply(_excel_safe_value)
+            sanitized.to_excel(writer, sheet_name=sheet_name[:31], index=False)
     buffer.seek(0)
     return buffer.read()
 
