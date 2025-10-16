@@ -8,3 +8,6 @@ pandas
 openai>=1.30.0
 python-dotenv
 apify-client
+fpdf2
+xlsxwriter
+kaleido
