@@ -862,6 +862,19 @@ def _excel_safe_value(value: Any) -> Any:
     return value
 
 
+def _pdf_safe_text(text: Any, max_chunk: int = 60) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    sanitized = []
+    for token in text.split(" "):
+        if len(token) <= max_chunk:
+            sanitized.append(token)
+            continue
+        chunks = [token[i : i + max_chunk] for i in range(0, len(token), max_chunk)]
+        sanitized.append(" ".join(chunks))
+    return " ".join(sanitized)
+
+
 def export_dataframe_to_excel(sheets: Dict[str, pd.DataFrame]) -> bytes:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
@@ -914,9 +927,9 @@ def generate_pdf_summary(
     for label, payload in headline_metrics.items():
         current_value = payload.get("current")
         delta = payload.get("delta_pct")
-        text = f"{label}: {format_number(current_value)}"
+        text = _pdf_safe_text(f"{label}: {format_number(current_value)}")
         if delta is not None and not np.isnan(delta):
-            text += f" ({delta:+.1f}% vs prev.)"
+            text = f"{text} ({delta:+.1f}% vs prev.)"
         pdf.multi_cell(0, 7, text)
     if insights:
         pdf.ln(4)
@@ -924,14 +937,14 @@ def generate_pdf_summary(
         pdf.cell(0, 8, "Highlights & Alerts", ln=True)
         pdf.set_font("Helvetica", "", 12)
         for insight in insights:
-            pdf.multi_cell(0, 6, f"• {insight}")
+            pdf.multi_cell(0, 6, _pdf_safe_text(f"• {insight}"))
     if recommendations:
         pdf.ln(4)
         pdf.set_font("Helvetica", "B", 14)
         pdf.cell(0, 8, "Recommended Actions", ln=True)
         pdf.set_font("Helvetica", "", 12)
         for rec in recommendations:
-            pdf.multi_cell(0, 6, f"• {rec}")
+            pdf.multi_cell(0, 6, _pdf_safe_text(f"• {rec}"))
     return pdf.output(dest="S").encode("latin-1")
 
 
