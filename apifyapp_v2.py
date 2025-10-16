@@ -867,6 +867,12 @@ def export_dataframe_to_excel(sheets: Dict[str, pd.DataFrame]) -> bytes:
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         for sheet_name, frame in sheets.items():
             sanitized = frame.copy()
+            datetime_tz_cols = sanitized.select_dtypes(include=["datetimetz"]).columns
+            for column in datetime_tz_cols:
+                try:
+                    sanitized[column] = sanitized[column].dt.tz_convert(None)
+                except (TypeError, AttributeError):
+                    sanitized[column] = sanitized[column].dt.tz_localize(None)
             for column in sanitized.columns:
                 if sanitized[column].dtype == "O":
                     sanitized[column] = sanitized[column].apply(_excel_safe_value)
@@ -1127,16 +1133,25 @@ def main() -> None:
         available_dates = full_df["posted_date"].dropna()
         min_date = available_dates.min() if not available_dates.empty else default_start
         max_date = available_dates.max() if not available_dates.empty else default_end
-        date_selection = st.date_input(
-            "Date range",
-            value=(max(min_date, default_start), max_date),
-            min_value=min_date,
-            max_value=max_date,
+        use_date_filter = st.checkbox(
+            "Filter by date range",
+            value=False,
+            help="Toggle on to narrow the dataset to a specific date window.",
         )
-        if isinstance(date_selection, tuple):
-            current_range = (date_selection[0], date_selection[1])
+        current_range = None
+        if use_date_filter and min_date is not None and max_date is not None:
+            date_selection = st.date_input(
+                "Date range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+            )
+            if isinstance(date_selection, tuple) and len(date_selection) == 2:
+                current_range = (date_selection[0], date_selection[1])
+            elif isinstance(date_selection, date):
+                current_range = (date_selection, date_selection)
         else:
-            current_range = (date_selection, date_selection)
+            current_range = None
 
         comparison_mode = st.selectbox(
             "Compare to",
@@ -1180,12 +1195,12 @@ def main() -> None:
         st.warning("No posts match the current filters. Adjust filters or ingest additional data.")
         return
 
-    if comparison_mode == "Previous period":
+    if comparison_mode == "Previous period" and current_range:
         period_days = (current_range[1] - current_range[0]).days + 1
         previous_end = current_range[0] - timedelta(days=1)
         previous_start = previous_end - timedelta(days=period_days - 1)
         previous_range = (previous_start, previous_end)
-    elif comparison_mode == "Same period last year":
+    elif comparison_mode == "Same period last year" and current_range:
         delta_year = timedelta(days=365)
         previous_range = (current_range[0] - delta_year, current_range[1] - delta_year)
     else:
@@ -1364,15 +1379,23 @@ def main() -> None:
         else:
             insights.append("Engagement levels are stable during the selected period.")
 
-        today_top = top_post(current_df, current_range[1])
+        comparison_reference_date = current_range[1] if current_range else current_df["posted_date"].max()
+        if isinstance(comparison_reference_date, pd.Timestamp):
+            comparison_reference_date = comparison_reference_date.date()
+        if isinstance(comparison_reference_date, date):
+            reference_label = comparison_reference_date.isoformat()
+            today_top = top_post(current_df, comparison_reference_date)
+            weekly_top = top_hashtag_of_week(current_df, comparison_reference_date)
+        else:
+            reference_label = "current selection"
+            today_top = top_post(current_df, None)
+            weekly_top = None
         if today_top is not None:
             insights.append(
-                f"Top post {current_range[1]}: @{today_top['owner_username']} drove "
+                f"Top post {reference_label}: @{today_top['owner_username']} drove "
                 f"{format_number(today_top['engagement_total'])} engagements ("
                 f"{format_number(today_top['engagement_rate_pct'], is_percent=True)} rate)."
             )
-
-        weekly_top = top_hashtag_of_week(current_df, current_range[1])
         if weekly_top:
             insights.append(f"Top hashtag of the week: #{weekly_top}.")
 
@@ -1490,8 +1513,12 @@ def main() -> None:
                 if not schedule_name or not recipients:
                     st.warning("Provide a schedule name and at least one recipient.")
                 else:
+                    if current_range:
+                        date_filter_snapshot = [current_range[0].isoformat(), current_range[1].isoformat()]
+                    else:
+                        date_filter_snapshot = None
                     filter_snapshot = {
-                        "date_range": [current_range[0].isoformat(), current_range[1].isoformat()],
+                        "date_range": date_filter_snapshot,
                         "hashtags": selected_hashtags,
                         "content_types": selected_content,
                         "countries": selected_countries,
