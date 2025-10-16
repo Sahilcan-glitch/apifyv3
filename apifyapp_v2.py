@@ -296,58 +296,27 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     processed = df.copy()
-<<<<<<< HEAD
     id_candidates = ["id", "postId", "post_id", "shortCode", "shortcode"]
-    post_id_series = None
+    post_id_series = pd.Series(pd.NA, index=processed.index, dtype="object")
     for candidate in id_candidates:
         if candidate in processed.columns:
-            series = processed[candidate]
-            if post_id_series is None:
-                post_id_series = series
-            else:
-                mask = post_id_series.isna() | (post_id_series.astype(str).str.strip() == "") | (
-                    post_id_series.astype(str).str.lower() == "nan"
-                )
-                post_id_series = post_id_series.mask(mask, series)
-    if post_id_series is None:
-        post_id_series = processed.index.astype(str)
-    else:
-        fallback = processed.index.astype(str)
-        mask = post_id_series.isna() | (post_id_series.astype(str).str.strip() == "") | (
-            post_id_series.astype(str).str.lower() == "nan"
-        )
-        post_id_series = post_id_series.mask(mask, fallback)
-    processed["post_id"] = post_id_series.astype(str)
-    numeric_cols = [
-        "likesCount",
-        "commentsCount",
-        "videoViewCount",
-        "playsCount",
-        "saveCount",
-        "impressions",
-        "reach",
-    ]
-    for col in numeric_cols:
-        if col in processed.columns:
-            processed[col] = pd.to_numeric(processed[col], errors="coerce").fillna(0.0)
-        else:
-            processed[col] = 0.0
-    processed["ownerUsername"] = processed.get("ownerUsername", "").astype(str).replace("nan", "Unknown")
-    processed["productType"] = processed.get("productType", "other").astype(str).str.lower()
-    processed["productTypeDisplay"] = processed["productType"].map(PRODUCT_TYPE_MAP).fillna("Other")
-    processed["caption"] = processed.get("caption", "").astype(str)
-    processed["caption_preview"] = processed["caption"].apply(
-        lambda text: (text[:140] + " …") if isinstance(text, str) and len(text) > 140 else text
-=======
-    processed["post_id"] = (
-        processed.get("id")
-        .fillna(processed.get("postId"))
-        .fillna(processed.get("shortCode"))
-        .fillna(processed.get("shortcode"))
-        .fillna(processed.index.astype(str))
-        .astype(str)
->>>>>>> a31220030e309676b370321561556048831a80e9
+            candidate_values = processed[candidate]
+            candidate_str = candidate_values.astype(str)
+            valid_mask = (
+                candidate_values.notna()
+                & candidate_str.str.strip().ne("")
+                & candidate_str.str.lower().ne("nan")
+            )
+            fill_mask = post_id_series.isna() & valid_mask
+            post_id_series = post_id_series.where(~fill_mask, candidate_str)
+    missing_mask = (
+        post_id_series.isna()
+        | post_id_series.astype(str).str.strip().eq("")
+        | post_id_series.astype(str).str.lower().eq("nan")
     )
+    fallback_ids = processed.index.astype(str)
+    post_id_series.loc[missing_mask] = fallback_ids[missing_mask.to_numpy()]
+    processed["post_id"] = post_id_series.astype(str)
     processed["timestamp"] = pd.to_datetime(processed.get("timestamp", pd.NaT), errors="coerce", utc=True)
     processed["posted_date"] = processed["timestamp"].dt.date
     processed["posted_hour"] = processed["timestamp"].dt.hour
