@@ -215,6 +215,27 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     processed = df.copy()
+    id_candidates = ["id", "postId", "post_id", "shortCode", "shortcode"]
+    post_id_series = None
+    for candidate in id_candidates:
+        if candidate in processed.columns:
+            series = processed[candidate]
+            if post_id_series is None:
+                post_id_series = series
+            else:
+                mask = post_id_series.isna() | (post_id_series.astype(str).str.strip() == "") | (
+                    post_id_series.astype(str).str.lower() == "nan"
+                )
+                post_id_series = post_id_series.mask(mask, series)
+    if post_id_series is None:
+        post_id_series = processed.index.astype(str)
+    else:
+        fallback = processed.index.astype(str)
+        mask = post_id_series.isna() | (post_id_series.astype(str).str.strip() == "") | (
+            post_id_series.astype(str).str.lower() == "nan"
+        )
+        post_id_series = post_id_series.mask(mask, fallback)
+    processed["post_id"] = post_id_series.astype(str)
     numeric_cols = [
         "likesCount",
         "commentsCount",
