@@ -1,0 +1,10 @@
+networkx
+textblob
+plotly
+numpy
+matplotlib
+streamlit
+pandas
+openai>=1.30.0
+python-dotenv
+apify-client
