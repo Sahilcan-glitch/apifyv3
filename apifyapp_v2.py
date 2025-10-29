@@ -862,17 +862,31 @@ def _excel_safe_value(value: Any) -> Any:
     return value
 
 
-def _pdf_safe_text(text: Any, max_chunk: int = 60) -> str:
+def _pdf_safe_text(text: Any, max_chunk: int = 24) -> str:
+    """Ensure PDF strings only contain Latin-1 chars and wrap long tokens."""
     if not isinstance(text, str):
         text = str(text)
-    sanitized = []
+    text = (
+        text.replace("\r", " ")
+        .replace("\n", " ")
+        .replace("•", "-")
+    )
+    sanitized_tokens: list[str] = []
     for token in text.split(" "):
-        if len(token) <= max_chunk:
-            sanitized.append(token)
+        if not token:
+            sanitized_tokens.append("")
             continue
-        chunks = [token[i : i + max_chunk] for i in range(0, len(token), max_chunk)]
-        sanitized.append(" ".join(chunks))
-    return " ".join(sanitized)
+        try:
+            token.encode("latin-1")
+        except UnicodeEncodeError:
+            token = token.encode("latin-1", "ignore").decode("latin-1")
+        if len(token) <= max_chunk:
+            sanitized_tokens.append(token)
+            continue
+        wrapped = textwrap.wrap(token, width=max_chunk, break_long_words=True, break_on_hyphens=False)
+        sanitized_tokens.append(" ".join(wrapped))
+    sanitized = " ".join(sanitized_tokens)
+    return " ".join(sanitized.split())
 
 
 def export_dataframe_to_excel(sheets: Dict[str, pd.DataFrame]) -> bytes:
