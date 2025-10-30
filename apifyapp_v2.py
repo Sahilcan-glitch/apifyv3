@@ -1172,7 +1172,7 @@ initialize_database()
 
 
 def main() -> None:
-    st.title("🚀 Instagram Campaign Intelligence V3")
+    st.title("WedIQ – Instagram Hashtag Performance Monitor")
     st.caption(
         "Daily refreshed analytics for Instagram hashtags and profiles so marketing teams can amplify awareness and leads."
     )
@@ -1500,26 +1500,6 @@ def main() -> None:
             geo_fig = build_geo_map(country_rollup)
             chart_registry["Geo engagement heatmap"] = geo_fig
             st.plotly_chart(geo_fig, use_container_width=True)
-            continent_df = country_rollup.copy()
-            continent_df["continent"] = continent_df["location"].apply(country_to_continent)
-            continent_summary = (
-                continent_df.groupby("continent", dropna=False)["posts"].sum().reset_index()
-            )
-            continent_summary = continent_summary[continent_summary["posts"] > 0]
-            if continent_summary.empty:
-                st.info("Need additional location data to render continent mix.")
-            else:
-                pie_fig = px.pie(
-                    continent_summary,
-                    names="continent",
-                    values="posts",
-                    title="Posts by continent",
-                    color_discrete_sequence=px.colors.sequential.Viridis,
-                )
-                pie_fig.update_layout(height=360, margin=dict(l=20, r=20, t=60, b=40))
-                chart_registry["Posts by continent"] = pie_fig
-                st.plotly_chart(pie_fig, use_container_width=True)
-                st.caption("Distribution of post counts across continents based on available locations.")
             reach_chart_df = country_rollup.sort_values("reach", ascending=False)
             reach_chart_df = reach_chart_df[reach_chart_df["reach"] > 0]
             if reach_chart_df.empty:
