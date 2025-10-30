@@ -28,6 +28,12 @@ try:
 except ImportError:
     pio = None
 
+try:
+    from pycountry_convert import country_alpha2_to_continent_code, country_name_to_country_alpha2
+except ImportError:
+    country_alpha2_to_continent_code = None
+    country_name_to_country_alpha2 = None
+
 
 st.set_page_config(
     page_title="Instagram Campaign Intelligence V3",
@@ -115,6 +121,72 @@ METRIC_HELP: Dict[str, str] = {
     "Engagement": "Likes + comments + shares + saves.",
     "Engagement Rate": "Total Engagement ÷ Reach × 100.",
 }
+
+CONTINENT_CODE_TO_NAME = {
+    "AF": "Africa",
+    "AN": "Antarctica",
+    "AS": "Asia",
+    "EU": "Europe",
+    "NA": "North America",
+    "OC": "Oceania",
+    "SA": "South America",
+}
+
+COUNTRY_CONTINENT_OVERRIDES: Dict[str, str] = {
+    "worldwide": "Global",
+    "global": "Global",
+    "unknown": "Unknown",
+    "usa": "North America",
+    "us": "North America",
+    "u.s.": "North America",
+    "u.s.a.": "North America",
+    "united states": "North America",
+    "united states of america": "North America",
+    "england": "Europe",
+    "scotland": "Europe",
+    "wales": "Europe",
+    "northern ireland": "Europe",
+    "uae": "Asia",
+    "united arab emirates": "Asia",
+    "south korea": "Asia",
+    "north korea": "Asia",
+    "republic of korea": "Asia",
+    "viet nam": "Asia",
+    "russia": "Europe",
+    "palestine": "Asia",
+    "syria": "Asia",
+    "iran": "Asia",
+    "hong kong": "Asia",
+    "macau": "Asia",
+    "taiwan": "Asia",
+    "czech republic": "Europe",
+    "bolivia": "South America",
+    "brunei": "Asia",
+    "laos": "Asia",
+    "myanmar": "Asia",
+}
+
+
+def country_to_continent(country: Any) -> str:
+    if not country or not isinstance(country, str):
+        return "Unknown"
+    normalized = country.strip()
+    if not normalized:
+        return "Unknown"
+    lower = normalized.lower()
+    if lower in COUNTRY_CONTINENT_OVERRIDES:
+        return COUNTRY_CONTINENT_OVERRIDES[lower]
+    if country_name_to_country_alpha2 and country_alpha2_to_continent_code:
+        try:
+            if len(normalized) == 2:
+                continent_code = country_alpha2_to_continent_code(normalized.upper())
+                return CONTINENT_CODE_TO_NAME.get(continent_code, "Other")
+            alpha2 = country_name_to_country_alpha2(normalized)
+            continent_code = country_alpha2_to_continent_code(alpha2)
+            return CONTINENT_CODE_TO_NAME.get(continent_code, "Other")
+        except Exception:
+            pass
+    return "Other"
 
 
 def initialize_database() -> None:
@@ -1244,7 +1316,6 @@ def main() -> None:
     hashtag_rollup = compute_hashtag_rollup(current_df)
     content_rollup = compute_content_rollup(current_df)
     country_rollup = compute_location_rollup(current_df, level="country")
-    city_rollup = compute_location_rollup(current_df, level="city")
 
     chart_registry: Dict[str, go.Figure] = {}
 
@@ -1429,11 +1500,45 @@ def main() -> None:
             geo_fig = build_geo_map(country_rollup)
             chart_registry["Geo engagement heatmap"] = geo_fig
             st.plotly_chart(geo_fig, use_container_width=True)
-        st.subheader("City drill-down")
-        if city_rollup.empty:
-            st.info("Add posts with city-level data to unlock this view.")
-        else:
-            st.dataframe(city_rollup, use_container_width=True, hide_index=True)
+            continent_df = country_rollup.copy()
+            continent_df["continent"] = continent_df["location"].apply(country_to_continent)
+            continent_summary = (
+                continent_df.groupby("continent", dropna=False)["posts"].sum().reset_index()
+            )
+            continent_summary = continent_summary[continent_summary["posts"] > 0]
+            if continent_summary.empty:
+                st.info("Need additional location data to render continent mix.")
+            else:
+                pie_fig = px.pie(
+                    continent_summary,
+                    names="continent",
+                    values="posts",
+                    title="Posts by continent",
+                    color_discrete_sequence=px.colors.sequential.Viridis,
+                )
+                pie_fig.update_layout(height=360, margin=dict(l=20, r=20, t=60, b=40))
+                chart_registry["Posts by continent"] = pie_fig
+                st.plotly_chart(pie_fig, use_container_width=True)
+                st.caption("Distribution of post counts across continents based on available locations.")
+            reach_chart_df = country_rollup.sort_values("reach", ascending=False)
+            reach_chart_df = reach_chart_df[reach_chart_df["reach"] > 0]
+            if reach_chart_df.empty:
+                st.info("Reach totals unavailable for the current selection.")
+            else:
+                reach_fig = px.bar(
+                    reach_chart_df,
+                    x="reach",
+                    y="location",
+                    orientation="h",
+                    title="Reach by country",
+                    labels={"reach": "Reach", "location": "Country"},
+                    color="reach",
+                    color_continuous_scale="Blues",
+                )
+                reach_fig.update_layout(height=360, margin=dict(l=20, r=20, t=60, b=40))
+                chart_registry["Reach by country"] = reach_fig
+                st.plotly_chart(reach_fig, use_container_width=True)
+                st.caption("Highlights which countries deliver the highest reach within the filtered posts.")
 
     with content_tab:
         st.subheader("Content type performance")
