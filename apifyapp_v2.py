@@ -1350,6 +1350,52 @@ def main() -> None:
             st.caption("Temporal trends track daily likes, comments, shares, and saves to highlight engagement momentum.")
         else:
             st.info("Need interaction metrics to display temporal engagement trends.")
+        st.subheader("Top posts gallery")
+        gallery_df = current_df.copy()
+        if gallery_df.empty:
+            st.info("No posts available in the filtered dataset.")
+        else:
+            ranking_options = {
+                "engagement_rate_pct": "Engagement rate",
+                "reach_final": "Reach proxy",
+                "likes": "Likes",
+                "comments": "Comments",
+                "engagement_total": "Total engagement",
+            }
+            top_n = st.slider("Number of highlighted posts", min_value=3, max_value=12, value=6, step=1)
+            ranking_metric = st.selectbox(
+                "Ranking metric",
+                options=list(ranking_options.keys()),
+                format_func=lambda key: ranking_options[key],
+            )
+            gallery_df["caption_preview"] = gallery_df["caption"].apply(_caption_preview)
+            for column in ranking_options.keys():
+                if column in gallery_df.columns:
+                    gallery_df[column] = pd.to_numeric(gallery_df[column], errors="coerce").fillna(0)
+            top_posts = gallery_df.sort_values(ranking_metric, ascending=False).head(top_n).reset_index(drop=True)
+            if top_posts.empty:
+                st.info("No posts match the selected ranking metric.")
+            else:
+                columns_container = st.columns(3)
+                for idx, row in top_posts.iterrows():
+                    target_col = columns_container[idx % 3]
+                    with target_col:
+                        media_url = extract_media_url(row)
+                        if media_url:
+                            st.image(media_url, use_container_width=True)
+                        else:
+                            st.markdown("`Image unavailable`")
+                        owner = row.get("owner_username") or row.get("ownerUsername") or "unknown"
+                        st.markdown(f"**@{owner}** · {row.get('product_display', 'Unknown')}")
+                        st.markdown(
+                            f"❤️ {format_number(row.get('likes', 0))} · 💬 {format_number(row.get('comments', 0))} · "
+                            f"ER {format_number(row.get('engagement_rate_pct', 0), is_percent=True)}"
+                        )
+                        st.caption(row.get("caption_preview", ""))
+                        post_link = extract_post_url(row)
+                        if post_link:
+                            st.markdown(f"[Open post]({post_link})")
+                st.caption("Gallery showcases the highest-performing posts based on your selected ranking metric.")
         st.caption("Charts update daily using persistent data; previous period overlays accelerate context.")
 
     with hashtag_tab:
@@ -1513,53 +1559,6 @@ def main() -> None:
             st.plotly_chart(heatmap_fig, use_container_width=True)
         else:
             st.info("Need more data across days and hours to render the heatmap.")
-
-        st.subheader("Top posts gallery")
-        gallery_df = current_df.copy()
-        if gallery_df.empty:
-            st.info("No posts available in the filtered dataset.")
-        else:
-            ranking_options = {
-                "engagement_rate_pct": "Engagement rate",
-                "reach_final": "Reach proxy",
-                "likes": "Likes",
-                "comments": "Comments",
-                "engagement_total": "Total engagement",
-            }
-            top_n = st.slider("Number of highlighted posts", min_value=3, max_value=12, value=6, step=1)
-            ranking_metric = st.selectbox(
-                "Ranking metric",
-                options=list(ranking_options.keys()),
-                format_func=lambda key: ranking_options[key],
-            )
-            gallery_df["caption_preview"] = gallery_df["caption"].apply(_caption_preview)
-            for column in ranking_options.keys():
-                if column in gallery_df.columns:
-                    gallery_df[column] = pd.to_numeric(gallery_df[column], errors="coerce").fillna(0)
-            top_posts = gallery_df.sort_values(ranking_metric, ascending=False).head(top_n).reset_index(drop=True)
-            if top_posts.empty:
-                st.info("No posts match the selected ranking metric.")
-            else:
-                columns_container = st.columns(3)
-                for idx, row in top_posts.iterrows():
-                    target_col = columns_container[idx % 3]
-                    with target_col:
-                        media_url = extract_media_url(row)
-                        if media_url:
-                            st.image(media_url, use_container_width=True)
-                        else:
-                            st.markdown("`Image unavailable`")
-                        owner = row.get("owner_username") or row.get("ownerUsername") or "unknown"
-                        st.markdown(f"**@{owner}** · {row.get('product_display', 'Unknown')}")
-                        st.markdown(
-                            f"❤️ {format_number(row.get('likes', 0))} · 💬 {format_number(row.get('comments', 0))} · "
-                            f"ER {format_number(row.get('engagement_rate_pct', 0), is_percent=True)}"
-                        )
-                        st.caption(row.get("caption_preview", ""))
-                        post_link = extract_post_url(row)
-                        if post_link:
-                            st.markdown(f"[Open post]({post_link})")
-                st.caption("Gallery showcases the highest-performing posts based on your selected ranking metric.")
 
     with insights_tab:
         st.subheader("Automated insights")
