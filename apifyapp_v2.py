@@ -886,6 +886,81 @@ def export_figure_to_png(fig: go.Figure) -> Optional[bytes]:
         return None
 
 
+def _caption_preview(text: Any, limit: int = 140) -> str:
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _get_raw_payload(row: pd.Series) -> Dict[str, Any]:
+    raw_blob = row.get("raw_json")
+    if isinstance(raw_blob, str) and raw_blob:
+        try:
+            payload = json.loads(raw_blob)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def extract_media_url(row: pd.Series) -> Optional[str]:
+    candidates = [
+        "displayUrl",
+        "display_url",
+        "thumbnailUrl",
+        "thumbnailSrc",
+        "imageUrl",
+        "image_url",
+        "previewImage",
+    ]
+    for key in candidates:
+        value = row.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+    payload = _get_raw_payload(row)
+    for key in candidates:
+        value = payload.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+    images = payload.get("images")
+    if isinstance(images, list):
+        for item in images:
+            if isinstance(item, dict):
+                src = item.get("url") or item.get("src")
+                if isinstance(src, str) and src.startswith("http"):
+                    return src
+            elif isinstance(item, str) and item.startswith("http"):
+                return item
+    return None
+
+
+def extract_post_url(row: pd.Series) -> Optional[str]:
+    candidates = [
+        "url",
+        "permalink",
+        "post_url",
+        "link",
+        "href",
+    ]
+    for key in candidates:
+        value = row.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+    payload = _get_raw_payload(row)
+    for key in candidates:
+        value = payload.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+    shortcode = row.get("shortcode") or row.get("shortCode") or payload.get("shortcode") or payload.get("shortCode")
+    if isinstance(shortcode, str) and shortcode:
+        return f"https://www.instagram.com/p/{shortcode.strip('/')}/"
+    return None
+
+
 def generate_html_summary(
     headline_metrics: Dict[str, Dict[str, float]],
     insights: list[str],
@@ -1240,7 +1315,7 @@ def main() -> None:
                         name=ENGAGEMENT_COLUMNS[col],
                         stackgroup="one",
                     )
-                )
+            )
             breakdown_fig.update_layout(
                 title="Engagement mix by interaction type",
                 height=320,
@@ -1250,6 +1325,31 @@ def main() -> None:
             )
             chart_registry["Engagement mix"] = breakdown_fig
             st.plotly_chart(breakdown_fig, use_container_width=True)
+        action_cols = [col for col in ["likes", "comments", "shares", "saves"] if col in current_daily.columns]
+        st.subheader("Temporal trends")
+        if action_cols:
+            timeline_df = current_daily[["posted_date"] + action_cols].melt(
+                id_vars="posted_date", var_name="metric", value_name="value"
+            )
+            timeline_fig = px.line(
+                timeline_df,
+                x="posted_date",
+                y="value",
+                color="metric",
+                markers=True,
+                color_discrete_sequence=px.colors.sequential.Magma,
+            )
+            timeline_fig.update_layout(
+                height=360,
+                margin=dict(l=20, r=20, t=60, b=40),
+                xaxis_title="Date",
+                yaxis_title="Total interactions",
+            )
+            chart_registry["Temporal trends"] = timeline_fig
+            st.plotly_chart(timeline_fig, use_container_width=True)
+            st.caption("Temporal trends track daily likes, comments, shares, and saves to highlight engagement momentum.")
+        else:
+            st.info("Need interaction metrics to display temporal engagement trends.")
         st.caption("Charts update daily using persistent data; previous period overlays accelerate context.")
 
     with hashtag_tab:
@@ -1308,6 +1408,100 @@ def main() -> None:
             st.plotly_chart(content_chart, use_container_width=True)
             st.dataframe(content_rollup, use_container_width=True, hide_index=True)
 
+        st.subheader("Audience engagement insights")
+        format_rollup = (
+            current_df.groupby("product_display")
+            .agg(
+                avg_engagement_rate=("engagement_rate_pct", "mean"),
+                median_reach=("reach_final", "median"),
+            )
+            .reset_index()
+        )
+        format_rollup = format_rollup.dropna(subset=["avg_engagement_rate"])
+        if format_rollup.empty:
+            st.info("Need engagement data segmented by content format.")
+        else:
+            format_rollup["median_reach"] = format_rollup["median_reach"].fillna(0)
+            format_fig = px.bar(
+                format_rollup,
+                x="product_display",
+                y="avg_engagement_rate",
+                color="avg_engagement_rate",
+                color_continuous_scale="Teal",
+                labels={
+                    "product_display": "Content format",
+                    "avg_engagement_rate": "Avg engagement rate (%)",
+                },
+                custom_data=["median_reach"],
+            )
+            format_fig.update_layout(
+                height=360,
+                margin=dict(l=20, r=20, t=60, b=40),
+                coloraxis_showscale=False,
+            )
+            format_fig.update_traces(hovertemplate="<b>%{x}</b><br>Avg ER: %{y:.2f}%<br>Median reach: %{customdata[0]:,.0f}<extra></extra>")
+            chart_registry["Content format engagement"] = format_fig
+            st.plotly_chart(format_fig, use_container_width=True)
+            st.caption("Average engagement rate by content format (hover to compare median reach).")
+
+        st.subheader("Caption depth vs engagement")
+        scatter_df = current_df[current_df["engagement_rate_pct"].notna()].copy()
+        if scatter_df.empty:
+            st.info("Need posts with engagement rate and captions to render the scatterplot.")
+        else:
+            scatter_df["caption_length"] = scatter_df["caption"].fillna("").astype(str).str.len()
+            scatter_df["caption_preview"] = scatter_df["caption"].apply(_caption_preview)
+            scatter_df["bubble_size"] = scatter_df["engagement_total"].clip(lower=0)
+            scatter_df["post_url"] = scatter_df.apply(extract_post_url, axis=1)
+            scatter_fig = px.scatter(
+                scatter_df,
+                x="caption_length",
+                y="engagement_rate_pct",
+                size="bubble_size",
+                color="content_category",
+                hover_data={
+                    "ownerUsername": True,
+                    "caption_preview": True,
+                    "post_url": True,
+                    "engagement_rate_pct": ":.2f",
+                },
+                labels={
+                    "caption_length": "Caption length (characters)",
+                    "engagement_rate_pct": "Engagement rate (%)",
+                },
+            )
+            scatter_fig.update_layout(height=420, margin=dict(l=20, r=20, t=60, b=40))
+            chart_registry["Caption depth vs engagement"] = scatter_fig
+            st.plotly_chart(scatter_fig, use_container_width=True)
+            st.caption("Longer captions often correlate with deeper storytelling—use this scatter to find the sweet spot.")
+
+        st.subheader("Engagement funnel")
+        funnel_totals = [
+            ("Impressions", current_df["impressions"].sum()),
+            ("Reach proxy", current_df["reach_final"].sum()),
+            ("Likes", current_df["likes"].sum()),
+            ("Comments", current_df["comments"].sum()),
+            ("Shares", current_df["shares"].sum()),
+            ("Saves", current_df["saves"].sum()),
+            ("Total engagement", current_df["engagement_total"].sum()),
+        ]
+        funnel_df = pd.DataFrame(funnel_totals, columns=["stage", "value"])
+        funnel_df = funnel_df[funnel_df["value"] > 0]
+        if funnel_df["value"].nunique() <= 1:
+            st.info("Need more variance across stages to visualise the engagement funnel.")
+        else:
+            funnel_fig = px.funnel(
+                funnel_df,
+                y="stage",
+                x="value",
+                color="stage",
+                color_discrete_sequence=px.colors.sequential.Purples,
+            )
+            funnel_fig.update_layout(height=420, margin=dict(l=20, r=20, t=60, b=40))
+            chart_registry["Engagement funnel"] = funnel_fig
+            st.plotly_chart(funnel_fig, use_container_width=True)
+            st.caption("Funnel illustrates the drop-off from impressions through to core engagement actions.")
+
         st.subheader("Posting cadence heatmap")
         heatmap_fig = build_heatmap(current_df, "engagement_total")
         if heatmap_fig.data:
@@ -1315,6 +1509,53 @@ def main() -> None:
             st.plotly_chart(heatmap_fig, use_container_width=True)
         else:
             st.info("Need more data across days and hours to render the heatmap.")
+
+        st.subheader("Top posts gallery")
+        gallery_df = current_df.copy()
+        if gallery_df.empty:
+            st.info("No posts available in the filtered dataset.")
+        else:
+            ranking_options = {
+                "engagement_rate_pct": "Engagement rate",
+                "reach_final": "Reach proxy",
+                "likes": "Likes",
+                "comments": "Comments",
+                "engagement_total": "Total engagement",
+            }
+            top_n = st.slider("Number of highlighted posts", min_value=3, max_value=12, value=6, step=1)
+            ranking_metric = st.selectbox(
+                "Ranking metric",
+                options=list(ranking_options.keys()),
+                format_func=lambda key: ranking_options[key],
+            )
+            gallery_df["caption_preview"] = gallery_df["caption"].apply(_caption_preview)
+            for column in ranking_options.keys():
+                if column in gallery_df.columns:
+                    gallery_df[column] = pd.to_numeric(gallery_df[column], errors="coerce").fillna(0)
+            top_posts = gallery_df.sort_values(ranking_metric, ascending=False).head(top_n).reset_index(drop=True)
+            if top_posts.empty:
+                st.info("No posts match the selected ranking metric.")
+            else:
+                columns_container = st.columns(3)
+                for idx, row in top_posts.iterrows():
+                    target_col = columns_container[idx % 3]
+                    with target_col:
+                        media_url = extract_media_url(row)
+                        if media_url:
+                            st.image(media_url, use_container_width=True)
+                        else:
+                            st.markdown("`Image unavailable`")
+                        owner = row.get("owner_username") or row.get("ownerUsername") or "unknown"
+                        st.markdown(f"**@{owner}** · {row.get('product_display', 'Unknown')}")
+                        st.markdown(
+                            f"❤️ {format_number(row.get('likes', 0))} · 💬 {format_number(row.get('comments', 0))} · "
+                            f"ER {format_number(row.get('engagement_rate_pct', 0), is_percent=True)}"
+                        )
+                        st.caption(row.get("caption_preview", ""))
+                        post_link = extract_post_url(row)
+                        if post_link:
+                            st.markdown(f"[Open post]({post_link})")
+                st.caption("Gallery showcases the highest-performing posts based on your selected ranking metric.")
 
     with insights_tab:
         st.subheader("Automated insights")
