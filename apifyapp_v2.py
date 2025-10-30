@@ -1,7 +1,6 @@
 import os
 import io
 import json
-import textwrap
 import sqlite3
 from pathlib import Path
 from datetime import datetime, date, timedelta
@@ -16,11 +15,6 @@ import plotly.graph_objects as go
 
 from dotenv import load_dotenv
 from apify_client import ApifyClient
-
-try:
-    from fpdf import FPDF
-except ImportError:
-    FPDF = None
 
 try:
     from email.message import EmailMessage
@@ -862,33 +856,6 @@ def _excel_safe_value(value: Any) -> Any:
     return value
 
 
-def _pdf_safe_text(text: Any, max_chunk: int = 24) -> str:
-    """Ensure PDF strings only contain Latin-1 chars and wrap long tokens."""
-    if not isinstance(text, str):
-        text = str(text)
-    text = (
-        text.replace("\r", " ")
-        .replace("\n", " ")
-        .replace("•", "-")
-    )
-    sanitized_tokens: list[str] = []
-    for token in text.split(" "):
-        if not token:
-            sanitized_tokens.append("")
-            continue
-        try:
-            token.encode("latin-1")
-        except UnicodeEncodeError:
-            token = token.encode("latin-1", "ignore").decode("latin-1")
-        if len(token) <= max_chunk:
-            sanitized_tokens.append(token)
-            continue
-        wrapped = textwrap.wrap(token, width=max_chunk, break_long_words=True, break_on_hyphens=False)
-        sanitized_tokens.append(" ".join(wrapped))
-    sanitized = " ".join(sanitized_tokens)
-    return " ".join(sanitized.split())
-
-
 def export_dataframe_to_excel(sheets: Dict[str, pd.DataFrame]) -> bytes:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
@@ -917,49 +884,6 @@ def export_figure_to_png(fig: go.Figure) -> Optional[bytes]:
         return fig.to_image(format="png", scale=2)
     except Exception:
         return None
-
-
-def generate_pdf_summary(
-    headline_metrics: Dict[str, Dict[str, float]],
-    insights: list[str],
-    recommendations: list[str],
-) -> Optional[bytes]:
-    if FPDF is None:
-        return None
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, "Instagram Marketing Intelligence Summary", ln=True)
-    pdf.ln(4)
-    pdf.set_font("Helvetica", "", 12)
-    pdf.cell(0, 8, f"Generated on {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=True)
-    pdf.ln(6)
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Key Metrics", ln=True)
-    pdf.set_font("Helvetica", "", 12)
-    for label, payload in headline_metrics.items():
-        current_value = payload.get("current")
-        delta = payload.get("delta_pct")
-        text = _pdf_safe_text(f"{label}: {format_number(current_value)}")
-        if delta is not None and not np.isnan(delta):
-            text = f"{text} ({delta:+.1f}% vs prev.)"
-        pdf.multi_cell(0, 7, text)
-    if insights:
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 8, "Highlights & Alerts", ln=True)
-        pdf.set_font("Helvetica", "", 12)
-        for insight in insights:
-            pdf.multi_cell(0, 6, _pdf_safe_text(f"• {insight}"))
-    if recommendations:
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 8, "Recommended Actions", ln=True)
-        pdf.set_font("Helvetica", "", 12)
-        for rec in recommendations:
-            pdf.multi_cell(0, 6, _pdf_safe_text(f"• {rec}"))
-    return pdf.output(dest="S").encode("latin-1")
 
 
 def generate_html_summary(
@@ -1508,15 +1432,7 @@ def main() -> None:
             else:
                 st.warning("Unable to export chart. Install `kaleido` package for Plotly static images.")
 
-        pdf_bytes = generate_pdf_summary(comparison_stats or {}, insights, recommendations)
         html_summary = generate_html_summary(comparison_stats or {}, insights, recommendations)
-        if pdf_bytes:
-            st.download_button(
-                "Download summary (PDF)",
-                pdf_bytes,
-                file_name="instagram_summary.pdf",
-                mime="application/pdf",
-            )
         st.download_button(
             "Download summary (HTML)",
             html_summary.encode("utf-8"),
@@ -1529,11 +1445,11 @@ def main() -> None:
         if not schedule_df.empty:
             st.dataframe(schedule_df, use_container_width=True, hide_index=True)
         with st.form("schedule_report_form"):
-            st.markdown("Configure automated HTML/PDF deliveries. Requires SMTP credentials via environment.")
+            st.markdown("Configure automated HTML deliveries. Requires SMTP credentials via environment.")
             schedule_name = st.text_input("Schedule name")
             recipient_input = st.text_input("Recipients", placeholder="email@brand.com, marketing@agency.com")
             frequency = st.selectbox("Frequency", options=["Daily", "Weekly", "Monthly"])
-            formats = st.multiselect("Include formats", options=["HTML", "PDF"], default=["HTML", "PDF"])
+            formats = st.multiselect("Include formats", options=["HTML"], default=["HTML"])
             submitted = st.form_submit_button("Add schedule")
             if submitted:
                 recipients = [email.strip() for email in recipient_input.split(",") if email.strip()]
@@ -1568,8 +1484,6 @@ def main() -> None:
                 attachments: Dict[str, bytes] = {}
                 if "HTML" in formats:
                     attachments["instagram_summary.html"] = html_summary.encode("utf-8")
-                if "PDF" in formats and pdf_bytes:
-                    attachments["instagram_summary.pdf"] = pdf_bytes
                 success, error = send_email_report(
                     recipients,
                     f"Instagram report: {schedule_record['name']}",
