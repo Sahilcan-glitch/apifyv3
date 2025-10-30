@@ -1453,6 +1453,10 @@ def main() -> None:
             scatter_df["caption_preview"] = scatter_df["caption"].apply(_caption_preview)
             scatter_df["bubble_size"] = scatter_df["engagement_total"].clip(lower=0)
             scatter_df["post_url"] = scatter_df.apply(extract_post_url, axis=1)
+            owner_col = "owner_username" if "owner_username" in scatter_df.columns else "ownerUsername"
+            if owner_col not in scatter_df.columns:
+                scatter_df[owner_col] = ""
+            scatter_df["owner_handle"] = scatter_df[owner_col].fillna("").astype(str)
             scatter_fig = px.scatter(
                 scatter_df,
                 x="caption_length",
@@ -1460,7 +1464,7 @@ def main() -> None:
                 size="bubble_size",
                 color="content_category",
                 hover_data={
-                    "ownerUsername": True,
+                    "owner_handle": True,
                     "caption_preview": True,
                     "post_url": True,
                     "engagement_rate_pct": ":.2f",
