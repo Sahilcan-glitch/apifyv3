@@ -1332,8 +1332,20 @@ def main() -> None:
 
     chart_registry: Dict[str, go.Figure] = {}
 
+    dataset_start = full_df["posted_date"].min()
+    dataset_end = full_df["posted_date"].max()
+    selection_start = current_df["posted_date"].min() if not current_df.empty else None
+    selection_end = current_df["posted_date"].max() if not current_df.empty else None
+    def _format_range_date(val: Any) -> str:
+        if isinstance(val, pd.Timestamp):
+            val = val.date()
+        if isinstance(val, date):
+            return val.isoformat()
+        return "?"
+
     current_summary = compute_period_summary(current_df)
     st.markdown("### KPI Command Center")
+    st.caption(f"Current selection: {_format_range_date(selection_start)} to {_format_range_date(selection_end)}")
     kpi_cols = st.columns(len(METRIC_HELP))
     value_map = {
         "expected_reach": current_summary["expected_reach"],
@@ -1354,6 +1366,9 @@ def main() -> None:
             f"{delta_pct:+.1f}%" if delta_pct not in (None, np.nan) else None,
             help=help_text,
         )
+    if dataset_start is not None and not pd.isna(dataset_start):
+        with kpi_cols[0]:
+            st.caption(f"Posts from {_format_range_date(dataset_start)} to {_format_range_date(dataset_end)}")
 
     st.markdown("---")
     overview_tab, hashtag_tab, audience_tab, content_tab, insights_tab, reporting_tab = st.tabs(
