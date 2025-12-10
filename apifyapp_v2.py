@@ -1447,15 +1447,15 @@ def main() -> None:
         st.caption("Charts update daily using persistent data; previous period overlays accelerate context.")
 
     with hashtag_tab:
-            st.subheader("Hashtag performance")
-            if hashtag_rollup.empty:
-                st.info("No hashtags detected for the current filters.")
-            else:
-                metric_choice = st.selectbox(
-                    "Metric",
-                    options=["engagement", "reach", "likes", "comments", "avg_engagement_rate"],
-                    format_func=lambda key: key.replace("_", " ").title(),
-                )
+        st.subheader("Hashtag performance")
+        if hashtag_rollup.empty:
+            st.info("No hashtags detected for the current filters.")
+        else:
+            metric_choice = st.selectbox(
+                "Metric",
+                options=["engagement", "reach", "likes", "comments", "avg_engagement_rate"],
+                format_func=lambda key: key.replace("_", " ").title(),
+            )
             hashtag_chart = build_hashtag_comparison_chart(hashtag_rollup, metric_choice)
             chart_registry[f"Hashtag comparison ({metric_choice})"] = hashtag_chart
             st.plotly_chart(hashtag_chart, use_container_width=True)
