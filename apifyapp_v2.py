@@ -425,9 +425,7 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
             processed.loc[mask_zero_reach, ["likes", "comments", "shares", "saves"]].sum(axis=1)
         )
     processed["reach_final"] = processed["reach_final"].replace(0, np.nan)
-    processed["engagement_total"] = (
-        processed[["likes", "comments", "shares", "saves"]].sum(axis=1) / 15000
-    )
+    processed["engagement_total"] = processed["likes"] + processed["comments"] + processed["shares"] + processed["saves"]
     processed["engagement_rate"] = processed["engagement_total"].div(processed["reach_final"])
     processed["engagement_rate_pct"] = processed["engagement_rate"] * 100
     processed["source_query"] = processed.get("source_query", "").astype(str)
