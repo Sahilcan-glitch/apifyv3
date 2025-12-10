@@ -110,14 +110,12 @@ DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 ENGAGEMENT_COLUMNS = {
     "likes": "Likes",
     "comments": "Comments",
-    "shares": "Shares",
-    "saves": "Saves",
 }
 
 METRIC_HELP: Dict[str, str] = {
     "Total Posts": "Unique Instagram posts included in the filtered dataset.",
     "Reach": "Reach uses reported reach, or a proxy when unavailable.",
-    "Engagement": "Likes + comments + shares + saves.",
+    "Engagement": "Likes + comments (normalized by 15K).",
     "Engagement Rate": "Total Engagement ÷ Reach × 100.",
 }
 
@@ -390,7 +388,6 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
         "likes": ["likesCount", "edge_liked_by", "likeCount"],
         "comments": ["commentsCount", "edge_media_to_comment", "commentCount"],
         "video_views": ["videoViewCount", "playsCount", "video_count"],
-        "saves": ["saveCount", "savedCount"],
         "impressions": ["impressions"],
         "reach": ["reach"],
     }
@@ -401,13 +398,8 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
                 values = pd.to_numeric(processed[candidate], errors="coerce")
                 break
         processed[target] = values.fillna(0.0) if values is not None else 0.0
-    share_candidates = ["shareCount", "sharesCount", "reshareCount", "sendCount"]
-    share_values = None
-    for candidate in share_candidates:
-        if candidate in processed.columns:
-            share_values = pd.to_numeric(processed[candidate], errors="coerce")
-            break
-    processed["shares"] = share_values.fillna(0.0) if share_values is not None else 0.0
+    processed["shares"] = 0.0
+    processed["saves"] = 0.0
     processed["ownerUsername"] = processed.get("ownerUsername", "Unknown").astype(str).replace("nan", "Unknown")
     processed["productType"] = processed.get("productType", "other").astype(str).str.lower()
     processed["product_display"] = processed["productType"].map(PRODUCT_TYPE_MAP).fillna("Other")
@@ -421,10 +413,10 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
     mask_zero_reach = processed["reach_final"] == 0
     if mask_zero_reach.any():
         processed.loc[mask_zero_reach, "reach_final"] = (
-            processed.loc[mask_zero_reach, ["likes", "comments", "shares", "saves"]].sum(axis=1)
+            processed.loc[mask_zero_reach, ["likes", "comments"]].sum(axis=1)
         )
     processed["reach_final"] = processed["reach_final"].replace(0, np.nan)
-    processed["engagement_total"] = processed["likes"] + processed["comments"] + processed["shares"] + processed["saves"]
+    processed["engagement_total"] = (processed["likes"] + processed["comments"]) / 15000
     processed["engagement_rate"] = processed["engagement_total"].div(processed["reach_final"])
     processed["engagement_rate_pct"] = processed["engagement_rate"] * 100
     processed["source_query"] = processed.get("source_query", "").astype(str)
@@ -537,8 +529,6 @@ def load_posts(start: Optional[date] = None, end: Optional[date] = None) -> pd.D
     numeric_cols = [
         "likes",
         "comments",
-        "shares",
-        "saves",
         "impressions",
         "reach",
         "reach_final",
@@ -567,8 +557,6 @@ def compute_daily_metrics(df: pd.DataFrame) -> pd.DataFrame:
             engagement=("engagement_total", "sum"),
             likes=("likes", "sum"),
             comments=("comments", "sum"),
-            shares=("shares", "sum"),
-            saves=("saves", "sum"),
         )
         .reset_index()
         .sort_values("posted_date")
@@ -594,8 +582,6 @@ def compute_hashtag_rollup(df: pd.DataFrame) -> pd.DataFrame:
             engagement=("engagement_total", "sum"),
             likes=("likes", "sum"),
             comments=("comments", "sum"),
-            shares=("shares", "sum"),
-            saves=("saves", "sum"),
             avg_engagement_rate=("engagement_rate_pct", "mean"),
         )
         .reset_index()
@@ -1387,7 +1373,7 @@ def main() -> None:
             )
             chart_registry["Engagement mix"] = breakdown_fig
             st.plotly_chart(breakdown_fig, use_container_width=True)
-        action_cols = [col for col in ["likes", "comments", "shares", "saves"] if col in current_daily.columns]
+        action_cols = [col for col in ["likes", "comments"] if col in current_daily.columns]
         st.subheader("Temporal trends")
         if action_cols:
             timeline_df = current_daily[["posted_date"] + action_cols].melt(
@@ -1409,7 +1395,7 @@ def main() -> None:
             )
             chart_registry["Temporal trends"] = timeline_fig
             st.plotly_chart(timeline_fig, use_container_width=True)
-            st.caption("Temporal trends track daily likes, comments, shares, and saves to highlight engagement momentum.")
+            st.caption("Temporal trends track daily likes and comments to highlight engagement momentum.")
         else:
             st.info("Need interaction metrics to display temporal engagement trends.")
         st.subheader("Top posts gallery")
@@ -1461,15 +1447,15 @@ def main() -> None:
         st.caption("Charts update daily using persistent data; previous period overlays accelerate context.")
 
     with hashtag_tab:
-        st.subheader("Hashtag performance")
-        if hashtag_rollup.empty:
-            st.info("No hashtags detected for the current filters.")
-        else:
-            metric_choice = st.selectbox(
-                "Metric",
-                options=["engagement", "reach", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
-                format_func=lambda key: key.replace("_", " ").title(),
-            )
+            st.subheader("Hashtag performance")
+            if hashtag_rollup.empty:
+                st.info("No hashtags detected for the current filters.")
+            else:
+                metric_choice = st.selectbox(
+                    "Metric",
+                    options=["engagement", "reach", "likes", "comments", "avg_engagement_rate"],
+                    format_func=lambda key: key.replace("_", " ").title(),
+                )
             hashtag_chart = build_hashtag_comparison_chart(hashtag_rollup, metric_choice)
             chart_registry[f"Hashtag comparison ({metric_choice})"] = hashtag_chart
             st.plotly_chart(hashtag_chart, use_container_width=True)
@@ -1606,8 +1592,6 @@ def main() -> None:
             ("Reach", current_df["reach_final"].sum()),
             ("Likes", current_df["likes"].sum()),
             ("Comments", current_df["comments"].sum()),
-            ("Shares", current_df["shares"].sum()),
-            ("Saves", current_df["saves"].sum()),
             ("Total engagement", current_df["engagement_total"].sum()),
         ]
         funnel_df = pd.DataFrame(funnel_totals, columns=["stage", "value"])
