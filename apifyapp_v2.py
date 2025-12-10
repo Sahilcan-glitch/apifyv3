@@ -116,8 +116,7 @@ ENGAGEMENT_COLUMNS = {
 
 METRIC_HELP: Dict[str, str] = {
     "Total Posts": "Unique Instagram posts included in the filtered dataset.",
-    "Reach": "Reach uses reported reach/impressions, or a proxy when unavailable.",
-    "Impressions": "Reported impressions aggregated across the filtered dataset.",
+    "Reach": "Reach uses reported reach, or a proxy when unavailable.",
     "Engagement": "Likes + comments + shares + saves.",
     "Engagement Rate": "Total Engagement ÷ Reach × 100.",
 }
@@ -565,7 +564,6 @@ def compute_daily_metrics(df: pd.DataFrame) -> pd.DataFrame:
         .agg(
             posts=("post_id", "nunique"),
             reach=("reach_final", "sum"),
-            impressions=("impressions", "sum"),
             engagement=("engagement_total", "sum"),
             likes=("likes", "sum"),
             comments=("comments", "sum"),
@@ -593,7 +591,6 @@ def compute_hashtag_rollup(df: pd.DataFrame) -> pd.DataFrame:
         .agg(
             posts=("post_id", "nunique"),
             reach=("reach_final", "sum"),
-            impressions=("impressions", "sum"),
             engagement=("engagement_total", "sum"),
             likes=("likes", "sum"),
             comments=("comments", "sum"),
@@ -615,7 +612,6 @@ def compute_content_rollup(df: pd.DataFrame) -> pd.DataFrame:
         .agg(
             posts=("post_id", "nunique"),
             reach=("reach_final", "sum"),
-            impressions=("impressions", "sum"),
             engagement=("engagement_total", "sum"),
             avg_reach=("reach_final", "mean"),
             avg_engagement_rate=("engagement_rate_pct", "mean"),
@@ -635,7 +631,6 @@ def compute_location_rollup(df: pd.DataFrame, level: str = "country") -> pd.Data
         .agg(
             posts=("post_id", "nunique"),
             reach=("reach_final", "sum"),
-            impressions=("impressions", "sum"),
             engagement=("engagement_total", "sum"),
             avg_engagement_rate=("engagement_rate_pct", "mean"),
             latitude=("latitude", "mean"),
@@ -649,16 +644,14 @@ def compute_location_rollup(df: pd.DataFrame, level: str = "country") -> pd.Data
 
 def compute_period_summary(df: pd.DataFrame) -> Dict[str, float]:
     if df.empty:
-        return {"total_posts": 0, "reach": 0.0, "impressions": 0.0, "engagement": 0.0, "engagement_rate": np.nan}
+        return {"total_posts": 0, "reach": 0.0, "engagement": 0.0, "engagement_rate": np.nan}
     reach = df["reach_final"].sum()
     engagement = df["engagement_total"].sum()
-    impressions = df["impressions"].sum()
     total_posts = df["post_id"].nunique()
     engagement_rate = safe_divide(engagement, reach) * 100
     return {
         "total_posts": total_posts,
         "reach": reach,
-        "impressions": impressions,
         "engagement": engagement,
         "engagement_rate": engagement_rate,
     }
@@ -674,7 +667,7 @@ def compute_period_comparison(current_df: pd.DataFrame, previous_df: pd.DataFram
         return ((current_value - previous_value) / previous_value) * 100
 
     comparison = {}
-    for key in ["total_posts", "reach", "impressions", "engagement", "engagement_rate"]:
+    for key in ["total_posts", "reach", "engagement", "engagement_rate"]:
         comparison[key] = {
             "current": current.get(key),
             "previous": previous.get(key),
@@ -1321,14 +1314,12 @@ def main() -> None:
 
     current_summary = compute_period_summary(current_df)
     st.markdown("### KPI Command Center")
-    kpi_cols = st.columns(5)
+    kpi_cols = st.columns(len(METRIC_HELP))
     for idx, (label, help_text) in enumerate(METRIC_HELP.items()):
         column = kpi_cols[idx]
         metric_key = label.replace(" ", "_").lower()
         if metric_key == "reach":
             current_value = current_summary["reach"]
-        elif metric_key == "impressions":
-            current_value = current_summary["impressions"]
         elif metric_key == "engagement":
             current_value = current_summary["engagement"]
         elif metric_key == "total_posts":
@@ -1476,7 +1467,7 @@ def main() -> None:
         else:
             metric_choice = st.selectbox(
                 "Metric",
-                options=["engagement", "reach", "impressions", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
+                options=["engagement", "reach", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
                 format_func=lambda key: key.replace("_", " ").title(),
             )
             hashtag_chart = build_hashtag_comparison_chart(hashtag_rollup, metric_choice)
@@ -1612,8 +1603,7 @@ def main() -> None:
 
         st.subheader("Engagement funnel")
         funnel_totals = [
-            ("Impressions", current_df["impressions"].sum()),
-            ("Reach proxy", current_df["reach_final"].sum()),
+            ("Reach", current_df["reach_final"].sum()),
             ("Likes", current_df["likes"].sum()),
             ("Comments", current_df["comments"].sum()),
             ("Shares", current_df["shares"].sum()),
@@ -1635,7 +1625,7 @@ def main() -> None:
             funnel_fig.update_layout(height=420, margin=dict(l=20, r=20, t=60, b=40))
             chart_registry["Engagement funnel"] = funnel_fig
             st.plotly_chart(funnel_fig, use_container_width=True)
-            st.caption("Funnel illustrates the drop-off from impressions through to core engagement actions.")
+            st.caption("Funnel illustrates the drop-off from reach through to core engagement actions.")
 
         st.subheader("Posting cadence heatmap")
         heatmap_fig = build_heatmap(current_df, "engagement_total")
