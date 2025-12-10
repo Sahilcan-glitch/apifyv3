@@ -1550,23 +1550,23 @@ def main() -> None:
 
         st.subheader("Audience engagement insights")
         format_rollup = (
-        current_df.groupby("product_display")
-        .agg(
-            avg_engagement_rate=("engagement_rate_pct", "mean"),
-            median_expected_reach=("expected_reach", "median"),
+            current_df.groupby("product_display")
+            .agg(
+                avg_engagement_rate=("engagement_rate_pct", "mean"),
+                median_expected_reach=("expected_reach", "median"),
+            )
+            .reset_index()
         )
-        .reset_index()
-    )
-    format_rollup = format_rollup.dropna(subset=["avg_engagement_rate"])
-    if format_rollup.empty:
-        st.info("Need engagement data segmented by content format.")
-    else:
-        format_rollup["median_expected_reach"] = format_rollup["median_expected_reach"].fillna(0)
-        format_fig = px.bar(
-            format_rollup,
-            x="product_display",
-            y="avg_engagement_rate",
-            color="avg_engagement_rate",
+        format_rollup = format_rollup.dropna(subset=["avg_engagement_rate"])
+        if format_rollup.empty:
+            st.info("Need engagement data segmented by content format.")
+        else:
+            format_rollup["median_expected_reach"] = format_rollup["median_expected_reach"].fillna(0)
+            format_fig = px.bar(
+                format_rollup,
+                x="product_display",
+                y="avg_engagement_rate",
+                color="avg_engagement_rate",
                 color_continuous_scale="Teal",
                 labels={
                     "product_display": "Content format",
