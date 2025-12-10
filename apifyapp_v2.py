@@ -42,6 +42,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+FOLLOWER_COUNT = 1_000_000
+CONVERSION_RATE = 0.01
+EXPECTED_REACH_PER_DAY = int(FOLLOWER_COUNT * CONVERSION_RATE)
+
 
 APIFY_TOKEN: Optional[str] = None
 if hasattr(st, "secrets"):
@@ -116,9 +120,9 @@ ENGAGEMENT_COLUMNS = {
 
 METRIC_HELP: Dict[str, str] = {
     "Total Posts": "Unique Instagram posts included in the filtered dataset.",
-    "Reach": "Reach uses reported reach or a proxy when unavailable.",
+    "Expected Reach": "Projected audience reach (1% of 1,000,000 followers ≈ 10,000 per day).",
     "Engagement": "Likes + comments + shares + saves.",
-    "Engagement Rate": "Total Engagement ÷ Reach × 100.",
+    "Engagement Rate": "Total Engagement ÷ Expected Reach × 100.",
 }
 
 CONTINENT_CODE_TO_NAME = {
@@ -267,6 +271,24 @@ def safe_divide(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def expected_reach_for_period(df: pd.DataFrame) -> float:
+    if df.empty or "posted_date" not in df.columns:
+        return 0.0
+    dates = df["posted_date"].dropna()
+    if dates.empty:
+        return 0.0
+    start = dates.min()
+    end = dates.max()
+    if isinstance(start, pd.Timestamp):
+        start = start.date()
+    if isinstance(end, pd.Timestamp):
+        end = end.date()
+    day_span = (end - start).days + 1
+    if day_span < 1:
+        day_span = 1
+    return day_span * EXPECTED_REACH_PER_DAY
+
+
 def parse_query_input(raw: str) -> list[str]:
     if not raw:
         return []
@@ -413,15 +435,10 @@ def preprocess_posts(df: pd.DataFrame) -> pd.DataFrame:
     processed["caption"] = processed.get("caption", processed.get("title", "")).astype(str)
     processed["hashtag_list"] = processed.get("hashtags", []).apply(extract_hashtags)
     processed["primary_hashtag"] = processed["hashtag_list"].apply(lambda tags: tags[0] if tags else None)
-    processed["reach_final"] = processed["reach"]
-    mask_zero_reach = processed["reach_final"] == 0
-    if mask_zero_reach.any():
-        processed.loc[mask_zero_reach, "reach_final"] = (
-            processed.loc[mask_zero_reach, ["likes", "comments", "shares", "saves"]].sum(axis=1)
-        )
-    processed["reach_final"] = processed["reach_final"].replace(0, np.nan)
+    processed["reach_final"] = processed["reach"].replace(0, np.nan)
     processed["engagement_total"] = processed["likes"] + processed["comments"] + processed["shares"] + processed["saves"]
-    processed["engagement_rate"] = processed["engagement_total"].div(processed["reach_final"])
+    processed["expected_reach"] = EXPECTED_REACH_PER_DAY
+    processed["engagement_rate"] = processed["engagement_total"].div(processed["expected_reach"])
     processed["engagement_rate_pct"] = processed["engagement_rate"] * 100
     processed["source_query"] = processed.get("source_query", "").astype(str)
     location_details = processed.apply(parse_location_fields, axis=1, result_type="expand")
@@ -546,6 +563,7 @@ def load_posts(start: Optional[date] = None, end: Optional[date] = None) -> pd.D
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     if "day_of_week" not in df.columns:
         df["day_of_week"] = df["timestamp"].dt.day_name()
+    df["expected_reach"] = EXPECTED_REACH_PER_DAY
     df = df.drop(columns=["impressions"], errors="ignore")
     return df
 
@@ -557,7 +575,6 @@ def compute_daily_metrics(df: pd.DataFrame) -> pd.DataFrame:
         df.groupby("posted_date")
         .agg(
             posts=("post_id", "nunique"),
-            reach=("reach_final", "sum"),
             engagement=("engagement_total", "sum"),
             likes=("likes", "sum"),
             comments=("comments", "sum"),
@@ -567,8 +584,9 @@ def compute_daily_metrics(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
         .sort_values("posted_date")
     )
+    daily["expected_reach"] = EXPECTED_REACH_PER_DAY
     daily["engagement_rate_pct"] = daily.apply(
-        lambda row: safe_divide(row["engagement"], row["reach"]) * 100, axis=1
+        lambda row: safe_divide(row["engagement"], row["expected_reach"]) * 100, axis=1
     )
     return daily
 
@@ -580,11 +598,13 @@ def compute_hashtag_rollup(df: pd.DataFrame) -> pd.DataFrame:
     exploded = exploded[exploded["hashtag_list"].notnull()]
     if exploded.empty:
         return pd.DataFrame()
+    total_expected = expected_reach_for_period(df)
+    total_posts = df["post_id"].nunique()
+    per_post_expected = safe_divide(total_expected, total_posts)
     metrics = (
         exploded.groupby("hashtag_list")
         .agg(
             posts=("post_id", "nunique"),
-            reach=("reach_final", "sum"),
             engagement=("engagement_total", "sum"),
             likes=("likes", "sum"),
             comments=("comments", "sum"),
@@ -595,23 +615,26 @@ def compute_hashtag_rollup(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
         .rename(columns={"hashtag_list": "hashtag"})
     )
+    metrics["expected_reach"] = (metrics["posts"] * per_post_expected).fillna(0)
     return metrics.sort_values("engagement", ascending=False)
 
 
 def compute_content_rollup(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
+    total_expected = expected_reach_for_period(df)
+    total_posts = df["post_id"].nunique()
+    per_post_expected = safe_divide(total_expected, total_posts)
     metrics = (
         df.groupby("content_category")
         .agg(
             posts=("post_id", "nunique"),
-            reach=("reach_final", "sum"),
             engagement=("engagement_total", "sum"),
-            avg_reach=("reach_final", "mean"),
             avg_engagement_rate=("engagement_rate_pct", "mean"),
         )
         .reset_index()
     )
+    metrics["expected_reach"] = (metrics["posts"] * per_post_expected).fillna(0)
     return metrics.sort_values("engagement", ascending=False)
 
 
@@ -619,12 +642,14 @@ def compute_location_rollup(df: pd.DataFrame, level: str = "country") -> pd.Data
     if df.empty:
         return pd.DataFrame()
     column = "country" if level == "country" else "city"
+    total_expected = expected_reach_for_period(df)
+    total_posts = df["post_id"].nunique()
+    per_post_expected = safe_divide(total_expected, total_posts)
     metrics = (
         df[df[column].notnull()]
         .groupby(column)
         .agg(
             posts=("post_id", "nunique"),
-            reach=("reach_final", "sum"),
             engagement=("engagement_total", "sum"),
             avg_engagement_rate=("engagement_rate_pct", "mean"),
             latitude=("latitude", "mean"),
@@ -633,19 +658,20 @@ def compute_location_rollup(df: pd.DataFrame, level: str = "country") -> pd.Data
         .reset_index()
         .rename(columns={column: "location"})
     )
+    metrics["expected_reach"] = (metrics["posts"] * per_post_expected).fillna(0)
     return metrics.sort_values("engagement", ascending=False)
 
 
 def compute_period_summary(df: pd.DataFrame) -> Dict[str, float]:
     if df.empty:
-        return {"total_posts": 0, "reach": 0.0, "engagement": 0.0, "engagement_rate": np.nan}
-    reach = df["reach_final"].sum()
+        return {"total_posts": 0, "expected_reach": 0.0, "engagement": 0.0, "engagement_rate": np.nan}
+    expected_reach = expected_reach_for_period(df)
     engagement = df["engagement_total"].sum()
     total_posts = df["post_id"].nunique()
-    engagement_rate = safe_divide(engagement, reach) * 100
+    engagement_rate = safe_divide(engagement, expected_reach) * 100
     return {
         "total_posts": total_posts,
-        "reach": reach,
+        "expected_reach": expected_reach,
         "engagement": engagement,
         "engagement_rate": engagement_rate,
     }
@@ -661,7 +687,7 @@ def compute_period_comparison(current_df: pd.DataFrame, previous_df: pd.DataFram
         return ((current_value - previous_value) / previous_value) * 100
 
     comparison = {}
-    for key in ["total_posts", "reach", "engagement", "engagement_rate"]:
+    for key in ["total_posts", "expected_reach", "engagement", "engagement_rate"]:
         comparison[key] = {
             "current": current.get(key),
             "previous": previous.get(key),
@@ -898,7 +924,7 @@ def build_geo_map(location_df: pd.DataFrame) -> go.Figure:
         size="engagement",
         color="engagement",
         hover_name="location",
-        hover_data={"reach": True, "engagement": True, "posts": True},
+        hover_data={"expected_reach": True, "engagement": True, "posts": True},
         projection="natural earth",
         height=420,
         title="Geo engagement heatmap",
@@ -1310,7 +1336,7 @@ def main() -> None:
     st.markdown("### KPI Command Center")
     kpi_cols = st.columns(len(METRIC_HELP))
     value_map = {
-        "reach": current_summary["reach"],
+        "expected_reach": current_summary["expected_reach"],
         "engagement": current_summary["engagement"],
         "total_posts": current_summary["total_posts"],
         "engagement_rate": current_summary["engagement_rate"],
@@ -1343,14 +1369,16 @@ def main() -> None:
 
     with overview_tab:
         st.subheader("Daily Trends")
-        reach_fig = build_time_series_chart(current_daily, previous_daily, "reach", "Reach trend", "Reach")
+        reach_fig = build_time_series_chart(
+            current_daily, previous_daily, "expected_reach", "Expected reach trend", "Expected reach"
+        )
         engagement_fig = build_time_series_chart(
             current_daily, previous_daily, "engagement", "Engagement trend", "Engagement"
         )
         rate_fig = build_time_series_chart(
             current_daily, previous_daily, "engagement_rate_pct", "Engagement rate trend", "Engagement rate (%)"
         )
-        chart_registry["Reach trend"] = reach_fig
+        chart_registry["Expected reach trend"] = reach_fig
         chart_registry["Engagement trend"] = engagement_fig
         chart_registry["Engagement rate trend"] = rate_fig
         st.plotly_chart(reach_fig, use_container_width=True)
@@ -1410,7 +1438,6 @@ def main() -> None:
         else:
             ranking_options = {
                 "engagement_rate_pct": "Engagement rate",
-                "reach_final": "Reach proxy",
                 "likes": "Likes",
                 "comments": "Comments",
                 "engagement_total": "Total engagement",
@@ -1458,7 +1485,7 @@ def main() -> None:
         else:
             metric_choice = st.selectbox(
                 "Metric",
-                options=["engagement", "reach", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
+                options=["engagement", "expected_reach", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
                 format_func=lambda key: key.replace("_", " ").title(),
             )
             hashtag_chart = build_hashtag_comparison_chart(hashtag_rollup, metric_choice)
@@ -1467,7 +1494,7 @@ def main() -> None:
             if hashtag_view == "Side-by-side" and selected_hashtags:
                 comparison_df = hashtag_rollup[hashtag_rollup["hashtag"].isin([tag.lower() for tag in selected_hashtags])]
                 st.dataframe(comparison_df, use_container_width=True)
-            st.caption("Ranked view highlights which hashtags are compounding reach and engagement.")
+            st.caption("Ranked view highlights which hashtags are compounding expected reach and engagement.")
         st.subheader("Top-performing hashtags")
         top_tags_df = hashtag_rollup.head(20)
         if not top_tags_df.empty:
@@ -1482,25 +1509,25 @@ def main() -> None:
             geo_fig = build_geo_map(country_rollup)
             chart_registry["Geo engagement heatmap"] = geo_fig
             st.plotly_chart(geo_fig, use_container_width=True)
-            reach_chart_df = country_rollup.sort_values("reach", ascending=False)
-            reach_chart_df = reach_chart_df[reach_chart_df["reach"] > 0]
+            reach_chart_df = country_rollup.sort_values("expected_reach", ascending=False)
+            reach_chart_df = reach_chart_df[reach_chart_df["expected_reach"] > 0]
             if reach_chart_df.empty:
-                st.info("Reach totals unavailable for the current selection.")
+                st.info("Expected reach not allocated for the current selection.")
             else:
                 reach_fig = px.bar(
                     reach_chart_df,
-                    x="reach",
+                    x="expected_reach",
                     y="location",
                     orientation="h",
-                    title="Reach by country",
-                    labels={"reach": "Reach", "location": "Country"},
-                    color="reach",
+                    title="Expected reach by country",
+                    labels={"expected_reach": "Expected reach", "location": "Country"},
+                    color="expected_reach",
                     color_continuous_scale="Blues",
                 )
                 reach_fig.update_layout(height=360, margin=dict(l=20, r=20, t=60, b=40))
-                chart_registry["Reach by country"] = reach_fig
+                chart_registry["Expected reach by country"] = reach_fig
                 st.plotly_chart(reach_fig, use_container_width=True)
-                st.caption("Highlights which countries deliver the highest reach within the filtered posts.")
+                st.caption("Highlights how expected reach is distributed based on posting share across countries.")
 
     with content_tab:
         st.subheader("Content type performance")
@@ -1511,7 +1538,7 @@ def main() -> None:
                 content_rollup,
                 x="content_category",
                 y="avg_engagement_rate",
-                hover_data=["engagement", "reach"],
+                hover_data=["engagement", "expected_reach"],
                 color="avg_engagement_rate",
                 color_continuous_scale="Blues",
                 title="Average engagement rate by content type",
@@ -1523,39 +1550,39 @@ def main() -> None:
 
         st.subheader("Audience engagement insights")
         format_rollup = (
-            current_df.groupby("product_display")
-            .agg(
-                avg_engagement_rate=("engagement_rate_pct", "mean"),
-                median_reach=("reach_final", "median"),
-            )
-            .reset_index()
+        current_df.groupby("product_display")
+        .agg(
+            avg_engagement_rate=("engagement_rate_pct", "mean"),
+            median_expected_reach=("expected_reach", "median"),
         )
-        format_rollup = format_rollup.dropna(subset=["avg_engagement_rate"])
-        if format_rollup.empty:
-            st.info("Need engagement data segmented by content format.")
-        else:
-            format_rollup["median_reach"] = format_rollup["median_reach"].fillna(0)
-            format_fig = px.bar(
-                format_rollup,
-                x="product_display",
-                y="avg_engagement_rate",
-                color="avg_engagement_rate",
+        .reset_index()
+    )
+    format_rollup = format_rollup.dropna(subset=["avg_engagement_rate"])
+    if format_rollup.empty:
+        st.info("Need engagement data segmented by content format.")
+    else:
+        format_rollup["median_expected_reach"] = format_rollup["median_expected_reach"].fillna(0)
+        format_fig = px.bar(
+            format_rollup,
+            x="product_display",
+            y="avg_engagement_rate",
+            color="avg_engagement_rate",
                 color_continuous_scale="Teal",
                 labels={
                     "product_display": "Content format",
                     "avg_engagement_rate": "Avg engagement rate (%)",
                 },
-                custom_data=["median_reach"],
+                custom_data=["median_expected_reach"],
             )
             format_fig.update_layout(
                 height=360,
                 margin=dict(l=20, r=20, t=60, b=40),
                 coloraxis_showscale=False,
             )
-            format_fig.update_traces(hovertemplate="<b>%{x}</b><br>Avg ER: %{y:.2f}%<br>Median reach: %{customdata[0]:,.0f}<extra></extra>")
+            format_fig.update_traces(hovertemplate="<b>%{x}</b><br>Avg ER: %{y:.2f}%<br>Median expected reach: %{customdata[0]:,.0f}<extra></extra>")
             chart_registry["Content format engagement"] = format_fig
             st.plotly_chart(format_fig, use_container_width=True)
-            st.caption("Average engagement rate by content format (hover to compare median reach).")
+            st.caption("Average engagement rate by content format (hover to compare median expected reach).")
 
         st.subheader("Caption depth vs engagement")
         scatter_df = current_df[current_df["engagement_rate_pct"].notna()].copy()
@@ -1594,7 +1621,7 @@ def main() -> None:
 
         st.subheader("Engagement funnel")
         funnel_totals = [
-            ("Reach proxy", current_df["reach_final"].sum()),
+            ("Expected reach", current_summary.get("expected_reach", 0)),
             ("Likes", current_df["likes"].sum()),
             ("Comments", current_df["comments"].sum()),
             ("Shares", current_df["shares"].sum()),
@@ -1616,7 +1643,7 @@ def main() -> None:
             funnel_fig.update_layout(height=420, margin=dict(l=20, r=20, t=60, b=40))
             chart_registry["Engagement funnel"] = funnel_fig
             st.plotly_chart(funnel_fig, use_container_width=True)
-            st.caption("Funnel illustrates the drop-off from reach through to core engagement actions.")
+            st.caption("Funnel illustrates the drop-off from expected reach through to core engagement actions.")
 
         st.subheader("Posting cadence heatmap")
         heatmap_fig = build_heatmap(current_df, "engagement_total")
@@ -1695,7 +1722,7 @@ def main() -> None:
             "owner_username",
             "content_category",
             "engagement_total",
-            "reach_final",
+            "expected_reach",
             "engagement_rate_pct",
             "hashtag_list",
         ]
