@@ -116,24 +116,9 @@ ENGAGEMENT_COLUMNS = {
 
 METRIC_HELP: Dict[str, str] = {
     "Total Posts": "Unique Instagram posts included in the filtered dataset.",
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-    "Reach": "Reach uses reported reach, or a proxy when unavailable.",
-<<<<<<< HEAD
-    "Engagement": "Likes + comments (normalized by 15K).",
-=======
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
     "Reach": "Reach uses reported reach/impressions, or a proxy when unavailable.",
     "Impressions": "Reported impressions aggregated across the filtered dataset.",
     "Engagement": "Likes + comments + shares + saves.",
->>>>>>> theirs
-=======
-    "Engagement": "Likes + comments + shares + saves.",
->>>>>>> parent of 49e59a4 (Update apifyapp_v2.py)
     "Engagement Rate": "Total Engagement ÷ Reach × 100.",
 }
 
@@ -1491,23 +1476,7 @@ def main() -> None:
         else:
             metric_choice = st.selectbox(
                 "Metric",
-<<<<<<< HEAD
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-                options=["engagement", "reach", "likes", "comments", "avg_engagement_rate"],
-=======
                 options=["engagement", "reach", "impressions", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
->>>>>>> theirs
-=======
-                options=["engagement", "reach", "impressions", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
->>>>>>> theirs
-=======
-                options=["engagement", "reach", "impressions", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
->>>>>>> theirs
-=======
-                options=["engagement", "reach", "likes", "comments", "shares", "saves", "avg_engagement_rate"],
->>>>>>> parent of 49e59a4 (Update apifyapp_v2.py)
                 format_func=lambda key: key.replace("_", " ").title(),
             )
             hashtag_chart = build_hashtag_comparison_chart(hashtag_rollup, metric_choice)
